@@ -13,6 +13,21 @@ The scripts are designed to be run from the command line. They will output a log
 AWS assessment script requires the AWS CLI to gather information about the environment.
 AWS CLI v2 must be installed and configured. The script will use the default profile unless a different one is specified.
 
+AWS permissions required for the script to run:
+- `dynamodb:ListTables`
+- `ec2:DescribeInstances`
+- `ec2:DescribeVpcs`
+- `eks:ListClusters`
+- `elasticloadbalancing:DescribeLoadBalancers`
+- `lambda:ListFunctions`
+- `rds:DescribeDBClusters`
+- `rds:DescribeDBInstances`
+- `redshift:DescribeClusters`
+- `s3:ListBuckets`
+- `wafv2:ListWebACLs`
+- `organizations:ListAccounts` - If using the `-o` flag for scanning an entire organization
+- `ec2:DescribeRegions` - Unless using the `-r` flag to scan specific regions
+
 #### Choosing a profile
 The `-p` flag can be used to specify a profile to use for the AWS CLI. This is useful if you have multiple AWS accounts configured.
 

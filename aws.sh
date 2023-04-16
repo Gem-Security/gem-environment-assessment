@@ -6,16 +6,27 @@ export AWS_MAX_ATTEMPTS=5
 export AWS_STS_REGIONAL_ENDPOINTS=regional
 
 PROFILE=""
+ORGANIZATION_ROLE_NAME=""
+REGIONS_TO_SCAN=""
 
-while getopts "hp:" opt; do
+while getopts "hp:o:r:" opt; do
   case $opt in
     h)
-      echo "Usage: $0 [-p profile]"
-      echo "  -p profile  Use the specified AWS profile"
+      echo "Usage: $0 [-p profile] [-o organization_role_name] [-r region]"
+      echo "  -p profile                Use the specified AWS profile"
+      echo "  -o organization_role_name Use this specified role to assume into the sub-accounts"
+      echo "  -r region                 Region to scan (can be used multiple times)"
+      echo "  -h                        Show this help"
       exit 0
       ;;
     p)
-      PROFILE=$OPTARG
+      PROFILE="${OPTARG}"
+      ;;
+    r)
+      REGIONS_TO_SCAN="${REGIONS_TO_SCAN} ${OPTARG}"
+      ;;
+    o)
+      ORGANIZATION_ROLE_NAME="${OPTARG}"
       ;;
     \?)
       exit 1
@@ -131,42 +142,87 @@ scan_single_account() {
 
   echo "[+] Scanning account $account_id"
 
-  local regions=$(_aws ec2 describe-regions --query "Regions[].RegionName" --output text 2>/dev/null || echo "${FALLBACK_ALL_REGIONS}")
-
-  rds_db_clusters=0
-  rds_db_instances=0
-  dynamo_db_tables=0
-  docdb_clusters=0
-  redshift_clusters=0
-  eks_clusters=0
-  vpcs=0
-  lambda_functions=0
-  elbv2_load_balancers=0
-  elb_load_balancers=0
-  ec2_instances=0
-  wafs=0
-  cloudfront=0
-  s3_buckets=0
+  local regions="${REGIONS_TO_SCAN:-$(_aws ec2 describe-regions --query "Regions[].RegionName" --output text 2>/dev/null || echo "${FALLBACK_ALL_REGIONS}")}"
 
   for region in $regions; do
     scan_account_region "${region}"
   done
-
-  echo "[+] Total Counts"
-  echo "     * AWS::RDS::DBClusters: ${rds_db_clusters}"
-  echo "     * AWS::RDS::DBInstance: ${rds_db_instances}"
-  echo "     * AWS::DynamoDB::Table: ${dynamo_db_tables}"
-  echo "     * AWS::DocumentDB::DBCluster: ${docdb_clusters}"
-  echo "     * AWS::Redshift::Cluster: ${redshift_clusters}"
-  echo "     * AWS::EKS::Cluster: ${eks_clusters}"
-  echo "     * AWS::EC2::VPC: ${vpcs}"
-  echo "     * AWS::Lambda::Function: ${lambda_functions}"
-  echo "     * AWS::ELBv2::LoadBalancer: ${elbv2_load_balancers}"
-  echo "     * AWS::ELB::LoadBalancer: ${elb_load_balancers}"
-  echo "     * AWS::EC2::Instance: ${ec2_instances}"
-  echo "     * AWS::WAFv2::WebACL/Regional: ${wafs}"
-  echo "     * AWS::WAFv2::WebACL/CloudFront: ${cloudfront}"
-  echo "     * AWS::S3::Bucket: ${s3_buckets}"
 }
 
-scan_single_account
+_export_aws_credentials() {
+  local access_key_id="${1}"; shift
+  local secret_access_key="${1}"; shift
+  local session_token="${1}"; shift
+
+  export AWS_ACCESS_KEY_ID="${access_key_id}"
+  export AWS_SECRET_ACCESS_KEY="${secret_access_key}"
+  export AWS_SESSION_TOKEN="${session_token}"
+}
+
+_unset_aws_credentials() {
+  unset AWS_ACCESS_KEY_ID
+  unset AWS_SECRET_ACCESS_KEY
+  unset AWS_SESSION_TOKEN
+}
+
+rds_db_clusters=0
+rds_db_instances=0
+dynamo_db_tables=0
+docdb_clusters=0
+redshift_clusters=0
+eks_clusters=0
+vpcs=0
+lambda_functions=0
+elbv2_load_balancers=0
+elb_load_balancers=0
+ec2_instances=0
+wafs=0
+cloudfront=0
+s3_buckets=0
+
+if [ -z "${ORGANIZATION_ROLE_NAME}" ]; then
+  scan_single_account
+else
+  echo "[+] Scanning all accounts in organization"
+
+  accounts=$(_aws organizations list-accounts --query "Accounts[?Status=='ACTIVE'].Id" --output text)
+  organization_profile_flag="${profile_flag}"
+
+  if [ -z "${accounts}" ]; then
+    echo "Error listing accounts" >&2
+    exit 1
+  fi
+
+  echo "[+] Found $(($(echo "${accounts}" | wc -w))) accounts"
+
+  for account_id in $accounts; do
+    profile_flag="${organization_profile_flag}"
+    credentials=$(_aws sts assume-role --role-arn "arn:aws:iam::${account_id}:role/${ORGANIZATION_ROLE_NAME}" --role-session-name "gem-cost-estimator" --query 'Credentials.[AccessKeyId,SecretAccessKey,SessionToken]' --output text || echo "")
+
+    if [ -z "${credentials}" ]; then
+      echo "Error assuming role in account ${account_id}" >&2
+      continue
+    fi
+
+    _export_aws_credentials ${credentials}
+    profile_flag=""
+    scan_single_account
+    _unset_aws_credentials
+  done
+fi
+
+echo "[+] Total Counts"
+echo "     * AWS::RDS::DBClusters: ${rds_db_clusters}"
+echo "     * AWS::RDS::DBInstance: ${rds_db_instances}"
+echo "     * AWS::DynamoDB::Table: ${dynamo_db_tables}"
+echo "     * AWS::DocumentDB::DBCluster: ${docdb_clusters}"
+echo "     * AWS::Redshift::Cluster: ${redshift_clusters}"
+echo "     * AWS::EKS::Cluster: ${eks_clusters}"
+echo "     * AWS::EC2::VPC: ${vpcs}"
+echo "     * AWS::Lambda::Function: ${lambda_functions}"
+echo "     * AWS::ELBv2::LoadBalancer: ${elbv2_load_balancers}"
+echo "     * AWS::ELB::LoadBalancer: ${elb_load_balancers}"
+echo "     * AWS::EC2::Instance: ${ec2_instances}"
+echo "     * AWS::WAFv2::WebACL/Regional: ${wafs}"
+echo "     * AWS::WAFv2::WebACL/CloudFront: ${cloudfront}"
+echo "     * AWS::S3::Bucket: ${s3_buckets}"

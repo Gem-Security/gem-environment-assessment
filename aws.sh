@@ -37,6 +37,11 @@ while getopts "hp:o:r:" opt; do
   esac
 done
 
+if ! command -v aws >/dev/null; then
+  echo "This script requires aws-cli"
+  exit 1
+fi
+
 if ! aws --version | grep -Eq 'aws-cli/2'; then
   echo "This script requires aws-cli version 2"
   exit 1
